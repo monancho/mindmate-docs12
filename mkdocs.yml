@@ -1,0 +1,27 @@
+site_name: MindMate Documentation
+
+theme:
+  name: material
+
+nav:
+  - 소개: index.md
+  - 프로젝트 개요:
+      - 전체 개요: overview/overview.md
+      - 핵심 기능 요약: overview/features.md
+      - 역할 분담 & 내가 한 파트: overview/my-part.md
+  - 아키텍처:
+      - 시스템 구조: overview/architecture.md
+      - 주요 플로우(UML/다이어그램): overview/flows.md
+  - 백엔드:
+      - 기술 스택 & 구조: backend/stack-structure.md
+      - 도메인 모델 & ERD: backend/domain-model.md
+      - 인증/인가 (JWT, Redis, 소셜 로그인): backend/auth-security.md
+      - 이미지 & 파일 처리(S3): backend/file-storage.md
+  - 프론트엔드:
+      - 기술 스택 & 폴더 구조: frontend/stack-structure.md
+      - 주요 화면 플로우: frontend/screens-flow.md
+      - 상태 관리 & API 연동: frontend/api-integration.md
+  - 인프라 & 배포:
+      - Docker & Docker Compose: infra/docker.md
+      - AWS EC2 & 배포 플로우: infra/deployment.md
+      - 도메인, Nginx, SSL: infra/domain-nginx-ssl.md
