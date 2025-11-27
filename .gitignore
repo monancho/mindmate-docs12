@@ -1,0 +1,9 @@
+# Python venv
+.venv/
+__pycache__/
+
+# MkDocs 빌드 결과
+site/
+
+# 기타
+.DS_Store
