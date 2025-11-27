@@ -34,7 +34,9 @@ nav:
           - 시스템 구조: overview/architecture.md
 
     - 회원 관리 · 인증:
-          - 인증 시스템 (JWT + Refresh + Redis): member/auth-system.md
+          - 회원기능: member/auth-system.md
+          - 로컬 로그인 & JWT 기초: member/auth-local-login-jwt.md
+          - 이메일 뭐시기: member/auth-email.md
 
     - 프론트엔드:
           - 기술 스택 & 폴더 구조: frontend/stack-structure.md
