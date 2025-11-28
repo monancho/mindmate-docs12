@@ -19,6 +19,20 @@ MindMate는 감정 기록과 AI 분석을 결합한 개인화 자기관리 서�
 본 문서는 프로젝트 협업 과정에서 제가 담당한 기능 구현을 중심으로 기술적 내용을 정리합니다.
 <br>
 
+## GitHub Repository
+
+MindMate는 프론트엔드와 백엔드가 각각 독립된 GitHub 리포지토리로 구성되어 있습니다.
+
+| 구분     | 리포지토리                                        | 설명                                                     |
+| -------- | ------------------------------------------------- | -------------------------------------------------------- |
+| Frontend | https://github.com/monancho/mindmate_frontend.git | React 기반 클라이언트(UI·인증 인터셉터·소셜 로그인 콜백) |
+| Backend  | https://github.com/monancho/mindmate_backend.git  | Spring Boot 기반 서버(JWT·OAuth·프로필·AI·Redis·배포)    |
+
+프론트엔드는 S3에 정적 호스팅되고,
+백엔드는 EC2(Docker Compose + Nginx + SSL)에서 운영되며,
+두 환경은 단일 도메인 구조와 API 연동을 통해 통합된 서비스로 동작합니다.
+
+<br>
 ## 프로젝트 배경 및 목표
 
 이 프로젝트는 학원 수업에서 배운 기술을 실제 서비스 형태로 구현해보고, 팀 협업 경험을 쌓는 것을 목표로 진행되었습니다.
