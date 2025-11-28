@@ -36,6 +36,7 @@ nav:
     - 회원 관리 · 인증:
           - 회원기능: member/auth-system.md
           - 로컬 로그인 & JWT 기초: member/auth-jwt.md
+          - axios: member/auth-axios.md
           - 이메일 뭐시기: member/auth-email.md
           - 소셜: member/auth-social.md
           - 이미지: member/auth-image.md

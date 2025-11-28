@@ -1,296 +1,311 @@
-# 프로필 이미지 업로드 · 수정 · 삭제 (User + S3)
+# 프로필 이미지 업로드 · 교체 · 삭제 (User + S3)
 
-> MindMate에서 **프로필 이미지**를 업로드/교체/삭제하는 전체 흐름을 정리한다.  
-> 프로필 기본 정보(닉네임/생일/MBTI)는 `/api/user`에서 처리하고,  
-> 이미지는 별도 엔드포인트(`/api/user/profile-image`, `/api/user/profile-image/delete`)로 관리한다.
-
----
-
-## 1. 전체 구조 개요
-
-### 1.1 기능 분류
-
-이미지 관련 기능은 크게 세 가지로 나뉜다.
-
-1. **프로필 기본 정보 저장**
-
-    - API: `POST /api/user`
-    - 내용: 닉네임, 생년월일, MBTI 저장 및 검증
-    - 담당: `UserService.setProfile(...)`
-
-2. **프로필 이미지 업로드 / 교체**
-
-    - API: `POST /api/user/profile-image`  
-      (요청 형식: `multipart/form-data`)
-    - 내용:
-        - 기존 이미지가 있으면 S3에서 먼저 삭제
-        - 새 파일 업로드 후, URL을 `User.profileImageUrl`에 저장
-    - 담당: `UserService.uploadProfileImage(...)`
-        - `S3Service.uploadProfileImage(...)`
-
-3. **프로필 이미지 삭제**
-    - API: `POST /api/user/profile-image/delete`
-    - 내용:
-        - 현재 프로필 이미지가 존재하면 S3에서 삭제
-        - DB에서 `User.profileImageUrl`을 `null`로 초기화
-    - 담당: `UserService.deleteProfileImage(...)`
-        - `S3Service.deleteFileByUrl(...)`
-
-> 일기 이미지 업로드도 같은 `S3Service`를 사용하지만,  
-> 이 문서는 **프로필 이미지 흐름만** 다룬다.
+> MindMate에서 구현한 **프로필 이미지 처리 시스템** 전체 구조와 설계 배경을 정리한 문서이다.
+> 이 문서는 프로필 이미지가 UX·네트워크·서버 품질에 모두 영향을 미치기 때문에
+> **프론트(1차 압축) → 백엔드(최종 품질) → S3(저장) → DB(URL 관리)**로 이어지는 전체 파이프라인을 중심으로 설명한다.
+> JWT 인증 및 Redis 기반 토큰 전략은 `auth-jwt.md`, Axios 재발급 구조는 `auth-axios.md` 문서를 전제로 한다.
 
 ---
 
-## 2. 저장 구조 설계
+## 1. 설계 의도 (Design Background)
 
-### 2.1 User 엔티티 – 이미지 URL만 보관
+프로필 이미지는 단순 파일 업로드가 아니라 **전체 사용자 경험 품질에 직결되는 핵심 기능**이다.
+이를 위해 다음 원칙을 중심으로 설계했다.
 
--   실제 파일은 **S3 버킷**에 저장한다.
--   DB에는 **이미지 파일 자체가 아니라**,  
-    S3 접근을 위한 **Public URL**만 `User.profileImageUrl` 필드에 저장한다.
--   회원탈퇴 시:
-    -   `profileImageUrl`을 `null`로 초기화
-    -   S3에 저장된 파일은 `deleteAllUserImages(userId)`로 일괄 삭제
+### (1) 텍스트 정보와 이미지 정보를 API 단위로 분리
 
-### 2.2 S3 버킷 경로 구조
+-   텍스트 정보: `/api/user`
+-   이미지 전용: `/api/user/profile-image`, `/api/user/profile-image/delete`
 
--   프로필 이미지: `profile/{userId}/{UUID}.jpg`
--   일기 이미지: `diary/{userId}/{UUID}.jpg`
-
-설계 의도:
-
--   유저 단위로 이미지 정리(탈퇴, 초기화 등)가 쉽다.
--   동일한 `S3Service`를 기준으로 프로필·일기 이미지를 공용 처리할 수 있다.
+API의 역할을 명확히 분리하여 유지보수성·확장성을 확보했다.
 
 ---
 
-## 3. 이미지 처리 분기
+### (2) 원본 이미지는 S3에 저장, DB에는 URL만 저장
 
--   새 이미지가 선택된 경우 → 업로드 API 호출
--   기존 이미지를 제거한 경우 → 삭제 API 호출
--   둘 다 아닐 경우 → 이미지 변경 없음
+-   DB에는 문자열만 저장 → 안정적이고 대용량에 적합
+-   백업, 복구, 마이그레이션 부담 구성
+-   일기 이미지와 동일한 구조로 확장 가능
 
 ---
 
-## 4. 프로필 이미지 업로드 시퀀스 다이어그램
+### (3) 최종 이미지 품질 관리는 백엔드 담당
+
+프론트는 미리보기·1차 압축만 수행하고
+최종 해상도(512px)·JPEG 압축(0.8)은 **백엔드에서 일괄 적용**한다.
+
+→ 기기/브라우저 환경에 상관없이 품질 일정
+→ 저장 용량·대역폭 절감
+
+---
+
+### (4) prefix 기반 S3 key 구조로 회원탈퇴 시 전체 삭제 용이
+
+-   프로필: `profile/{userId}/...`
+-   일기: `diary/{userId}/...`
+
+사용자 ID 기반 prefix 설계를 통해
+회원탈퇴 시 전체 데이터 정리를 단 몇 줄로 처리 가능하다.
+
+---
+
+### (5) UX 안정성을 위한 프론트 1차 압축 · 상태 분기
+
+프론트는
+
+-   파일 타입/용량 검증
+-   이미지 1차 압축 (browser-image-compression)
+-   “업로드/삭제/유지” 상태 기반 분기
+-   Blob 미리보기 적용
+
+을 담당하여 빠른 UI 응답성과 사용자 혼란 방지를 담당한다.
+
+---
+
+## 2. 전체 구조 개요 (Pipeline Overview)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 사용자
+    participant F as 프론트(ProfileSetupPage)
+    participant B as 백엔드(UserService)
+    participant S3S as S3Service
+    participant S3 as AWS S3
+    participant DB as DB(User.profileImageUrl)
+
+    U ->> F: 이미지 선택 · 미리보기 · 1차 압축
+    F ->> B: multipart/form-data 업로드
+    B ->> S3S: 리사이즈 · JPEG 압축 요청
+    S3S ->> S3: 이미지 업로드
+    S3 -->> S3S: 업로드 URL 반환
+    S3S -->> B: 최종 URL 반환
+    B ->> DB: profileImageUrl 저장
+```
+
+---
+
+## 3. 전체 플로우 (이미지 업로드/교체/삭제)
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor U as 사용자
     participant FE as 프론트
-    participant BE as 백엔드
+    participant BE as UserService
     participant S3S as S3Service
     participant S3 as AWS S3
+    participant DB as DB(User)
 
-    U ->> FE: 새 프로필 이미지 선택
-    FE ->> BE: POST /api/user/profile-image (multipart/form-data)
+    U ->> FE: 프로필 정보 입력 + 이미지 선택
+    FE ->> BE: POST /api/user (텍스트 저장)
+    BE -->> FE: UserResponseDto
 
-    BE ->> BE: 기존 profileImageUrl 확인
-    alt 기존 이미지 존재
+    alt 새 이미지 선택
+        FE ->> BE: POST /api/user/profile-image
+        BE ->> BE: 기존 이미지 URL 검사
         BE ->> S3S: deleteFileByUrl(oldUrl)
         S3S ->> S3: deleteObject(oldKey)
-        S3 -->> S3S: 삭제 완료
+
+        BE ->> S3S: uploadProfileImage(userId, file)
+        S3S ->> S3: putObject(profile/{userId}/{UUID}.jpg)
+        S3 -->> S3S: newUrl
+        S3S -->> BE: newUrl
+        BE ->> DB: profileImageUrl 갱신
+        BE -->> FE: 최신 UserResponseDto
+
+    else 이미지 삭제
+        FE ->> BE: POST /api/user/profile-image/delete
+        BE ->> S3S: deleteFileByUrl(profileUrl)
+        BE ->> DB: profileImageUrl = null
+        BE -->> FE: 최신 UserResponseDto
     end
-
-    BE ->> S3S: uploadProfileImage(userId, file)
-    S3S ->> S3: putObject(newKey)
-    S3 -->> S3S: 업로드 완료 (newUrl)
-    S3S -->> BE: newUrl
-
-    BE ->> BE: user.profileImageUrl = newUrl 저장
-    BE -->> FE: 최신 UserResponseDto 반환
-
 ```
 
 ---
 
-## 5. 백엔드 API 설계 (요청/응답 관점)
+## 4. 저장 구조 및 도메인 설계
 
-### 5.1 프로필 기본 정보 저장 – `POST /api/user`
+### 4.1 User 엔티티 — DB에는 URL만 저장
 
-**인증**
-
--   `Authorization: Bearer {accessToken}`
-
-**요청 바디 예시**
-
-```json
-{
-    "nickname": "모난초",
-    "birth_date": "1995-05-12",
-    "mbti": "INFP"
-}
+```java
+@Column(name = "profile_image_url")
+private String profileImageUrl;
 ```
 
-**처리 흐름**
-
-1. 토큰에서 `userId` 추출 후 유저 조회
-2. 닉네임이 변경된 경우, 중복 여부 검증
-3. 닉네임 / 생년월일 / MBTI 값을 업데이트
-4. 갱신된 사용자 정보를 `UserResponseDto`로 반환
-
-**응답 예시**
-
-```json
-{
-    "id": 1,
-    "nickname": "모난초",
-    "birth_date": "1995-05-12",
-    "mbti": "INFP",
-    "authType": "LOCAL",
-    "role": "USER",
-    "profile_image_url": "https://{bucket}.s3.amazonaws.com/profile/1/xxxx.jpg",
-    "email": "example@mindmate.com"
-}
-```
-
-**비고**
-
--   텍스트 정보 저장용 API이며,
-    **프로필 이미지 업로드/삭제는 별도 엔드포인트**에서 처리된다.
-
-### 5.2 프로필 이미지 업로드/교체 – `POST /api/user/profile-image`
-
-**인증**
-
--   `Authorization: Bearer {accessToken}`
-
-**요청**
-
--   `multipart/form-data`
--   필드: `file` (이미지 파일)
-
-**처리 흐름**
-
-1. 토큰에서 `userId` 추출 후 유저 조회
-2. 기존 `profileImageUrl`이 있으면 S3에서 삭제
-3. 새 이미지 업로드 (`profile/{userId}/{UUID}.jpg`)
-4. 업로드된 URL을 `user.profileImageUrl`에 저장
-5. 최신 `UserResponseDto` 반환
-
-**응답 예시**
-
-```json
-{
-    "id": 1,
-    "nickname": "호랑이",
-    "birth_date": "1995-05-12",
-    "mbti": "INFP",
-    "authType": "LOCAL",
-    "role": "USER",
-    "profile_image_url": "https://{bucket}.s3.amazonaws.com/profile/1/xxxx.jpg",
-    "email": "example@mindmate.com"
-}
-```
-
-### 5.3 프로필 이미지 삭제 – `POST /api/user/profile-image/delete`
-
-**인증**
-
--   `Authorization: Bearer {accessToken}`
-
-**요청**
-
--   바디 없음
-
-**처리 흐름**
-
-1. 토큰에서 `userId` 추출 후 유저 조회
-2. 등록된 `profileImageUrl`이 없으면 `400 BAD_REQUEST`
-3. S3에서 해당 이미지 삭제
-4. DB의 `profileImageUrl`을 `null`로 초기화
-5. 최신 `UserResponseDto` 반환
+> DB는 순수하게 “URL 주소 문자열”만 보관한다.
 
 ---
 
-## 6. S3Service 역할 정리
+### 4.2 S3 저장 규칙
 
-### 6.1 프로필 이미지 업로드
+-   **프로필 이미지**
+    `profile/{userId}/{UUID}.jpg`
+-   **일기 이미지**
+    `diary/{userId}/{UUID}.jpg`
 
-**입력**
+**설계 이점**
 
--   `userId`
--   `MultipartFile file`
-
-**기능**
-
-1. 파일 존재 여부 및 `image/*` 타입 검증
-2. 이미지를 디코딩하여 크기 확인
-3. 최대 한 변 512px 기준으로 리사이즈
-4. JPEG 포맷 + 품질 0.8로 재인코딩
-5. S3에 `profile/{userId}/{UUID}.jpg` 경로로 저장
-6. Public URL 반환
-
-**결과**
-
--   반환된 URL은 그대로 `User.profileImageUrl` 및 프론트의 `<img src>`에 사용 가능하다.
-
-### 6.2 URL 기반 단일 파일 삭제
-
-**입력**
-
--   전체 S3 파일 URL (`https://...amazonaws.com/{key}`)
-
-**기능**
-
-1. URL이 비어 있거나 공백인 경우 바로 종료
-2. `.amazonaws.com/` 기준으로 key 부분 추출
-3. 추출 실패(형식이 다름) 시 조용히 무시
-4. `amazonS3.deleteObject(bucket, key)` 호출
-
-### 6.3 유저 단위 일괄 삭제 (회원탈퇴용)
-
-**입력**
-
--   `userId`
-
-**기능**
-
-1. `profile/{userId}/` 프리픽스를 가지는 객체 전체 삭제
-2. `diary/{userId}/` 프리픽스를 가지는 객체 전체 삭제
-3. 내부적으로 `listObjectsV2 + deleteObjects` 반복 호출
-
-**사용처**
-
--   `UserService.deleteUser(...)`에서 회원탈퇴 시 호출된다.
--   S3 삭제가 실패하더라도 **회원탈퇴 자체는 계속 진행**하는 정책을 사용한다.
+-   사용자 단위 삭제 용이(prefix)
+-   도메인 구조 일관성 → S3Service 재사용 용이
+-   Public URL 그대로 `<img>` 사용 가능
 
 ---
 
-## 7. 오류 처리 정책
+## 5. 프론트 처리 흐름 (UX 중심)
 
--   401 UNAUTHORIZED: 토큰 누락/만료
--   400 BAD_REQUEST: 파일 없음, 이미지 형식 아님, 삭제 대상 이미지 없음
--   404 NOT_FOUND: 유저 없음
--   409 CONFLICT: 프로필 정보 충돌
--   500 INTERNAL_SERVER_ERROR: S3 업로드/삭제 오류
+### 5.1 이미지 선택 시 처리
+
+-   MIME 검증(`image/*`)
+-   10MB 제한
+-   `browser-image-compression`
+
+    -   최대 해상도 1920px
+    -   약 0.7MB 정도로 압축
+
+-   Blob URL로 즉시 미리보기
 
 ---
 
-## 8. 요약
+### 5.2 업로드/삭제/유지 분기
 
--   **저장 구조**
+| 사용자 행동      | 프론트 처리 방식            | 호출 API                         |
+| ---------------- | --------------------------- | -------------------------------- |
+| 새 이미지 선택   | 미리보기 표시 → 업로드 준비 | `/api/user/profile-image`        |
+| 기존 이미지 삭제 | 미리보기 제거 → 삭제 요청   | `/api/user/profile-image/delete` |
+| 이미지 변경 없음 | 텍스트 정보만 저장          | `/api/user`                      |
 
-    -   실제 이미지는 S3에 저장
-    -   DB에는 `profileImageUrl`만 저장하는 **URL 기반 구조**
+---
 
--   **프론트 흐름**
+### 5.3 Avatar 컴포넌트 정책
 
-    -   프로필 정보(`POST /api/user`) 저장 후,
-    -   이미지 상태(`imageFile`, `imagePreview`, `originalHasImage`)에 따라
+-   항상 **백엔드에서 저장된 S3 URL** 사용
+-   이미지 없을 때만 닉네임 첫 글자 fallback
+-   Blob 미리보기는 *업로드 직전 화면*에서만 사용
 
-        -   업로드 (`POST /api/user/profile-image`)
-        -   삭제 (`POST /api/user/profile-image/delete`)
-        -   그대로 유지 중 하나를 선택
+---
 
--   **백엔드 정책**
+## 6. 백엔드 API 설계
 
-    -   업로드/삭제 시 항상
+### 6.1 텍스트 정보 저장
 
-        1. S3 처리 (기존 파일 정리 포함)
-        2. DB의 `profileImageUrl` 업데이트
-        3. 최신 상태의 `UserResponseDto` 반환
+`POST /api/user`
+`PUT /api/user`
 
-    -   회원탈퇴 시에는 `deleteAllUserImages(userId)`로
-        프로필/다이어리 이미지를 모두 정리한다.
+-   닉네임 중복 체크
+-   생년월일/MBTI/닉네임 저장
+-   이미지와는 완전히 독립된 API
+
+---
+
+### 6.2 프로필 이미지 업로드
+
+`POST /api/user/profile-image`
+요청: `multipart/form-data`
+
+처리 과정:
+
+1. JWT에서 userId 추출
+2. 기존 이미지 있으면 S3 삭제
+3. 파일 검증(확장자/비어 있음)
+4. 서버 리사이즈(512px)
+5. JPEG(0.8) 압축
+6. putObject() 업로드
+7. DB에 URL 저장
+8. 최신 UserResponseDto 반환
+
+---
+
+### 6.3 프로필 이미지 삭제
+
+`POST /api/user/profile-image/delete`
+
+과정:
+
+1. URL 없으면 400
+2. 파일 삭제
+3. URL null 처리
+4. UserResponseDto 반환
+
+---
+
+## 7. S3Service 역할
+
+### 7.1 업로드
+
+-   BufferedImage 로드
+-   최대 512px 리사이즈
+-   Thumbnailator(JPEG 압축)
+-   `putObject()` 호출
+-   URL 반환
+
+---
+
+### 7.2 단일 삭제
+
+-   URL → key 파싱
+-   `deleteObject(bucket, key)`
+
+---
+
+### 7.3 회원탈퇴 전체 삭제
+
+-   `profile/{userId}/**`
+-   `diary/{userId}/**`
+    → prefix 기반 일괄 삭제
+
+---
+
+## 8. 회원탈퇴 이미지 정리 흐름
+
+```mermaid
+flowchart TD
+    U([회원탈퇴 요청])
+    US[[UserService.deleteUser]]
+    S3S[[S3Service]]
+
+    S3[(AWS S3 저장소)]
+    DB[(User 삭제)]
+
+    DELP[profile 경로 전체 삭제]
+    DELD[diary 경로 전체 삭제]
+
+    U --> US
+    US --> S3S
+    S3S --> DELP --> S3
+    S3S --> DELD --> S3
+    US --> DB
+```
+
+> S3 정리 후 최종적으로 UserRepository.delete() 수행.
+
+---
+
+## 9. 오류 처리 규칙
+
+### 공통
+
+-   `401` — 토큰 없음 / 무효
+-   `404` — 사용자 없음
+
+### 업로드/삭제
+
+-   `400`
+
+    -   파일 없음
+    -   이미지 아님
+    -   삭제 요청 시 URL 없음
+
+-   `500`
+
+    -   S3 업로드/삭제 에러
+
+---
+
+## 10. 요약
+
+-   프로필 이미지 기능은 **텍스트 정보와 이미지 정보 분리**를 기반으로 설계되었다.
+-   프론트는 사용자 경험 중심(압축·미리보기·상태 분기),
+    백엔드는 품질 통일(리사이즈·압축)과 전체 S3 정리 로직을 담당한다.
+-   prefix 기반 저장 구조로 회원탈퇴 시 전체 삭제가 간결하다.
+-   Avatar와 UI는 항상 **최종 S3 URL**만 참조해 일관성이 유지된다.
