@@ -39,12 +39,11 @@ nav:
           - 이메일 뭐시기: member/auth-email.md
           - 소셜: member/auth-social.md
           - 이미지: member/auth-image.md
-
-    - 프론트엔드:
-          - 기술 스택 & 폴더 구조: frontend/stack-structure.md
-          - 주요 화면 플로우: frontend/screens-flow.md
-          - 상태 관리 & API 연동: frontend/api-integration.md
-    - 인프라 & 배포:
-          - Docker & Docker Compose: infra/docker.md
-          - AWS EC2 & 배포 플로우: infra/deployment.md
-          - 도메인, Nginx, SSL: infra/domain-nginx-ssl.md
+#     - 프론트엔드:
+#           - 기술 스택 & 폴더 구조: frontend/stack-structure.md
+#           - 주요 화면 플로우: frontend/screens-flow.md
+#           - 상태 관리 & API 연동: frontend/api-integration.md
+#     - 인프라 & 배포:
+#           - Docker & Docker Compose: infra/docker.md
+#           - AWS EC2 & 배포 플로우: infra/deployment.md
+#           - 도메인, Nginx, SSL: infra/domain-nginx-ssl.md
